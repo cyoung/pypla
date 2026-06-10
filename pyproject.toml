@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pypla"
+version = "0.1.0"
+description = "Monitor TP-Link / Broadcom (BCM60500) powerline adapters over raw Layer 2"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["scapy>=2.6"]
+keywords = ["homeplug", "powerline", "plc", "broadcom", "mediaxtream", "tp-link"]
+
+[project.scripts]
+pypla = "pypla.cli:main"
+
+[tool.setuptools]
+packages = ["pypla"]

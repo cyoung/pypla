@@ -1,0 +1,3 @@
+# Runtime dependencies for pypla (see pyproject.toml for packaging metadata).
+# scapy provides the raw Layer-2 send/sniff transport (libpcap-based).
+scapy>=2.6,<3
