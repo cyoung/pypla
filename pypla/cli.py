@@ -196,8 +196,9 @@ def run_report(path: str) -> int:
     def _stats(v: list[int]) -> str:
         if not v:
             return "no data"
+        zeros = sum(1 for x in v if x == 0)
         return (f"min {min(v)} / med {statistics.median(v):.0f} / "
-                f"max {max(v)} Mbps  (0 Mbps in {sum(1 for x in v if x == 0)})")
+                f"max {max(v)} Mbps  (zero-rate in {zeros}/{len(v)} samples)")
 
     for mac, d in per.items():
         print(f"\nadapter {mac}: in {d['seen']}/{len(samples)} snapshots, "
