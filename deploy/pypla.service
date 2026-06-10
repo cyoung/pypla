@@ -1,0 +1,13 @@
+# One powerline snapshot, appended as a single JSON line to the log.
+# Adjust ExecStart's venv path and -i interface, then install with:
+#   sudo cp deploy/pypla.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pypla.timer
+
+[Unit]
+Description=pypla powerline adapter snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pypla/venv/bin/pypla -i eth0 once --json
+StandardOutput=append:/var/log/pypla.jsonl
+StandardError=append:/var/log/pypla.err

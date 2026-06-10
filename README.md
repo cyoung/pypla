@@ -56,7 +56,32 @@ for adapter in collect(net, full=True):
         print(f"  {peer.mac}  tx={peer.tx_mbps} rx={peer.rx_mbps} Mbps")
 ```
 
-Modules:
+## Stability monitoring (Raspberry Pi / Linux)
+
+For long-term monitoring, run the Pi wired into the same L2 segment as the
+adapters (best: directly into one adapter's Ethernet port) so a missed poll
+means the powerline side, not Wi-Fi. JSON output is compact single-line when
+redirected, so a log file is one snapshot per line (JSONL):
+
+```sh
+sudo apt install python3-venv git           # scapy needs no libpcap on Linux
+git clone https://github.com/cyoung/pypla /opt/pypla && cd /opt/pypla
+python3 -m venv venv && ./venv/bin/pip install -e .
+
+# snapshot every minute via systemd (edit paths/interface in the unit first)
+sudo cp deploy/pypla.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now pypla.timer
+
+# later: summarize reboots, link-down events, gaps, and PHY-rate stats
+./venv/bin/pypla report /var/log/pypla.jsonl
+```
+
+`report` flags four stability signals per adapter: snapshots where it
+reported no peers (link down or adapter unreachable), `uptime_seconds`
+decreases (the adapter rebooted), sampling gaps (the monitor itself missed
+polls), and min/median/max TX/RX PHY rates per peer.
+
+## Modules
 
 - `pypla.protocol` — frame payloads, confirmation prefixes, parsers,
   dataclasses (`Adapter`, `Station`, `StationInfo`, `NetworkInfo`)

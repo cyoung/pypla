@@ -5,8 +5,12 @@
   sudo pypla -i en0 info              # adapter station-info + network-info
   sudo pypla -i en0 once [--json]     # full snapshot (info + peer rates)
   sudo pypla -i en0 watch -n 5        # poll every 5s
+  pypla report /var/log/pypla.jsonl   # summarize a snapshot log (no root needed)
   # skip discovery and hit a known adapter directly:
   sudo pypla -i en0 --adapter aa:bb:cc:dd:ee:ff once
+
+JSON output is pretty-printed on a TTY and compact (one line per snapshot,
+JSONL-friendly) when redirected to a file or pipe.
 """
 
 from __future__ import annotations
@@ -41,6 +45,12 @@ from .transport import Net
 
 def _fmt(v) -> str:
     return "-" if v is None else str(v)
+
+
+def _dump(adapters: list[Adapter]) -> str:
+    """Pretty JSON on a TTY; compact single-line (JSONL) when piped to a log."""
+    return json.dumps(api.to_dict(adapters),
+                      indent=2 if sys.stdout.isatty() else None)
 
 
 def print_tables(adapters: list[Adapter]) -> None:
@@ -122,6 +132,86 @@ def run_probe(net: Net, dst: str, which: str, verbose: bool) -> int:
     return 0
 
 
+# --- report: summarize a JSONL snapshot log -----------------------------------
+
+def run_report(path: str) -> int:
+    import statistics
+
+    samples = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                samples.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # tolerate partial/corrupt lines
+    if not samples:
+        print(f"no parsable snapshots in {path}", file=sys.stderr)
+        return 2
+    samples.sort(key=lambda s: s["timestamp"])
+
+    t0, t1 = samples[0]["timestamp"], samples[-1]["timestamp"]
+    span = format_uptime(int(t1 - t0)) or "0m"
+    print(f"{len(samples)} snapshots over {span}  "
+          f"({time.strftime('%Y-%m-%d %H:%M', time.localtime(t0))} -> "
+          f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(t1))})")
+
+    # sampling gaps: monitor host down, or `once` produced no output
+    if len(samples) > 2:
+        ivals = [b["timestamp"] - a["timestamp"]
+                 for a, b in zip(samples, samples[1:])]
+        med = statistics.median(ivals)
+        gaps = [(a["timestamp"], iv) for (a, _b), iv
+                in zip(zip(samples, samples[1:]), ivals)
+                if iv > max(2 * med, med + 30)]
+        print(f"sampling: median interval {med:.0f}s, {len(gaps)} gap(s)")
+        for ts, iv in gaps:
+            print(f"  gap of {format_uptime(int(iv))} after "
+                  f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))}")
+
+    per: dict[str, dict] = {}
+    for s in samples:
+        for a in s["adapters"]:
+            d = per.setdefault(a["mac"], {
+                "seen": 0, "down": 0, "reboots": [], "last_up": None,
+                "peers": {},
+            })
+            d["seen"] += 1
+            if not a["stations"]:
+                d["down"] += 1
+            up = (a.get("station_info") or {}).get("uptime_seconds")
+            if up is not None:
+                if d["last_up"] is not None and up < d["last_up"]:
+                    d["reboots"].append(s["timestamp"])
+                d["last_up"] = up
+            for st in a["stations"]:
+                r = d["peers"].setdefault(st["mac"], {"tx": [], "rx": []})
+                if st["tx_mbps"] is not None:
+                    r["tx"].append(st["tx_mbps"])
+                if st["rx_mbps"] is not None:
+                    r["rx"].append(st["rx_mbps"])
+
+    def _stats(v: list[int]) -> str:
+        if not v:
+            return "no data"
+        return (f"min {min(v)} / med {statistics.median(v):.0f} / "
+                f"max {max(v)} Mbps  (0 Mbps in {sum(1 for x in v if x == 0)})")
+
+    for mac, d in per.items():
+        print(f"\nadapter {mac}: in {d['seen']}/{len(samples)} snapshots, "
+              f"no-peer/unreachable in {d['down']}, "
+              f"{len(d['reboots'])} reboot(s)")
+        for ts in d["reboots"]:
+            print(f"  reboot detected near "
+                  f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))}")
+        for pmac, r in d["peers"].items():
+            print(f"  peer {pmac}: tx {_stats(r['tx'])}")
+            print(f"  peer {pmac}: rx {_stats(r['rx'])}")
+    return 0
+
+
 # --- entry point ---------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,7 +243,12 @@ def main(argv: list[str] | None = None) -> int:
     p_watch = sub.add_parser("watch", help="poll on an interval")
     p_watch.add_argument("-n", "--interval", type=float, default=5.0)
     p_watch.add_argument("--json", action="store_true")
+    p_rep = sub.add_parser("report", help="summarize a JSONL snapshot log")
+    p_rep.add_argument("logfile", help="file of one `once --json` line per sample")
     args = p.parse_args(argv)
+
+    if args.mode == "report":  # offline; needs no interface or root
+        return run_report(args.logfile)
 
     try:
         net = Net(args.iface, args.timeout)
@@ -199,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                             if s == a.mac and pl[:9] == cnf:
                                 print(f"  raw {label} <{s}>: {pl.hex()}")
             if args.json:
-                print(json.dumps(api.to_dict(adapters), indent=2))
+                print(_dump(adapters))
             else:
                 print_tables(adapters)
             return 0
@@ -207,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "once":
             adapters = api.collect(net, args.adapter, full=True)
             if args.json:
-                print(json.dumps(api.to_dict(adapters), indent=2))
+                print(_dump(adapters))
             else:
                 print_tables(adapters)
             return 0 if adapters else 2
@@ -223,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                 for a in pinned:
                     a.stations = api.query_stations(net, a.mac)
                 if args.json:
-                    print(json.dumps(api.to_dict(pinned)), flush=True)
+                    print(_dump(pinned), flush=True)
                 else:
                     print_tables(pinned)
                 time.sleep(args.interval)
